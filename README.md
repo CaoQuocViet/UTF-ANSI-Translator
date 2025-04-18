@@ -1,34 +1,90 @@
-# UTF-ANSI-Translator
+# Vietnamese Diacritic Restoration
 
-*A life-saving tool for when your "Tiếng Việt" becomes "Ti?ng Vi?t".*
+Transformer-based model to restore Vietnamese diacritics.
 
-Are you tired of your beautifully written Vietnamese turning into a mess of question marks and corrupted characters? This repo is your best buddy! It converts between UTF-8 and ANSI encoding formats – perfect for dealing with legacy software, broken exports, and copy-paste disasters.
+## ⚙️ Cấu hình & Chạy dự án
 
-## ✨ Features
+### Chuẩn bị dữ liệu
 
-- 🔁 Convert UTF-8 to ANSI (for apps stuck in the Windows XP era)
-- 🔄 Convert ANSI to UTF-8 (bring your text into the modern world)
-- ➕ Add full Vietnamese diacritics to plain-text
-- ❌ Strip all diacritics if you're feeling retro
-- 🧠 Handles mixed/broken encodings intelligently
+1. Tải và giải nén dataset từ Kaggle:  
+   [Old Newspaper Dataset](https://www.kaggle.com/alvations/old-newspapers)
 
-## 📦 Dataset
-
-The dataset used for this project was taken from Kaggle, specifically the ["old-newspapers"](https://www.kaggle.com/alvations/old-newspapers) dataset by alvations.
-
-## 🛠️ Use Case
-
-When your text editor says "Tiếng Việt", but your app screams "Ti?ng Vi?t" – this tool is here to restore peace in the encoding universe.
-
-## ⚠️ Disclaimer
-
-This tool cannot fix emotional damage caused by dealing with legacy CSV files, Outlook emails, or Notepad in compatibility mode.
-
-## 🚀 How to Use
-
-Coming soon: CLI and API examples!  
-For now, feel free to explore the source code and test it with your own text files.
+2. Chạy lệnh sau để xử lý dữ liệu đầu vào:
+```bash
+dotnet run <input file path> <output file path>
+```
 
 ---
 
-Give your Vietnamese the glow-up it deserves 🇻🇳
+### Huấn luyện mô hình
+
+```python
+from data_loader import load_data, make_dataset, save_vectorization
+from transformer_model import TransformerModel
+
+# Load và xử lý dữ liệu
+train_pairs, val_pairs, test_pairs = load_data('dataset/old-newspaper-vietnamese.txt', limit=10000)
+
+# Vectorization
+source_vectorization, target_vectorization = create_vectorizations(train_pairs)
+save_vectorization(source_vectorization, 'result/source_vectorization_layer.pkl')
+save_vectorization(target_vectorization, 'result/target_vectorization_layer.pkl')
+
+# Dataset
+train_ds = make_dataset(train_pairs, source_vectorization, target_vectorization, batch_size=64)
+val_ds = make_dataset(val_pairs, source_vectorization, target_vectorization, batch_size=64)
+
+# Mô hình
+transformer = TransformerModel(
+    source_vectorization=source_vectorization,
+    target_vectorization=target_vectorization,
+    dense_dim=8192,
+    num_heads=8,
+    drop_out=0
+)
+
+transformer.build_model(
+    optimizer="rmsprop",
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+transformer.fit(
+    train_ds,
+    epochs=50,
+    validation_data=val_ds
+)
+```
+
+---
+
+### Dự đoán bằng mô hình đã huấn luyện
+
+```python
+transformer = TransformerModel(
+    source_vectorization='result/source_vectorization_layer_cont.pkl',
+    target_vectorization='result/target_vectorization_layer_cont.pkl',
+    model_path='result/restore_diacritic.keras'
+)
+
+print(transformer.predict('co phai em la mua thu ha noi'))
+```
+
+---
+
+### Tiếp tục huấn luyện từ checkpoint
+
+```python
+from data_loader import load_vectorization_from_disk
+
+source_vectorization = load_vectorization_from_disk('result/source_vectorization_layer_cont.pkl')
+target_vectorization = load_vectorization_from_disk('result/target_vectorization_layer_cont.pkl')
+
+transformer = TransformerModel(
+    source_vectorization=source_vectorization,
+    target_vectorization=target_vectorization,
+    model_path='result/restore_diacritic_cont.keras'
+)
+
+transformer.fit(train_ds, epochs=50, validation_data=val_ds)
+```
