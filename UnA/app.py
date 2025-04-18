@@ -10,9 +10,8 @@ import uuid
 import traceback
 from flask import Flask, render_template, request, jsonify, send_from_directory, url_for
 
-from modules.predictor import Predictor
 from modules.converter import Converter
-from modules.utils import read_file, get_temp_directory
+from modules.utils import read_file, write_file, get_temp_directory
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -22,26 +21,15 @@ TEMP_DIR = get_temp_directory()
 app.config['TEMP_FOLDER'] = TEMP_DIR
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB max file size
 
-# Initialize predictor and converter
+# Initialize converter with ModelAdapter
 try:
-    print("Initializing predictor...")
-    predictor = Predictor()
-    
-    # Test predictor
-    if hasattr(predictor, 'model_loaded') and predictor.model_loaded:
-        print("Testing predictor with sample text...")
-        test_result = predictor.predict("day la mot thu nghiem")
-        print(f"Test result: {test_result}")
-    else:
-        print("Warning: Predictor model not loaded correctly")
-    
-    print("Initializing converter...")
-    converter = Converter(predictor=predictor)
+    print("Initializing converter with model adapter...")
+    converter = Converter()
 except Exception as e:
-    print(f"Error initializing predictor or converter: {e}")
+    print(f"Error initializing converter: {e}")
     traceback.print_exc()
-    # Initialize converter without predictor if there's an error
-    print("Falling back to converter without predictor")
+    # Initialize converter anyway
+    print("Initializing converter without model adapter")
     converter = Converter()
 
 @app.route('/')
@@ -81,16 +69,26 @@ def convert():
                 
             output_path = os.path.join(app.config['TEMP_FOLDER'], f"{filename_base}_{unique_id}_output{filename_ext}")
             
-            # Read original content
-            original_content, original_encoding = read_file(input_path)
-            print(f"File read with encoding: {original_encoding}")
+            # Convert file using the improved converter method
+            output_path = converter.convert_file(input_path, output_path, direction)
             
-            # Convert file
-            converter.convert_file(input_path, output_path, direction)
-            
-            # Read converted content
-            converted_content, converted_encoding = read_file(output_path)
-            print(f"Conversion complete. Output encoding: {converted_encoding}")
+            # Read the files for display in the UI, with robust error handling
+            try:
+                original_content, original_encoding = read_file(input_path)
+                converted_content, converted_encoding = read_file(output_path)
+            except Exception as e:
+                print(f"Warning: Error reading content for display: {e}")
+                # Use simpler approach for UI display
+                try:
+                    with open(input_path, 'rb') as f:
+                        original_content = f.read().decode('latin-1', errors='replace')
+                    with open(output_path, 'rb') as f:
+                        converted_content = f.read().decode('latin-1', errors='replace')
+                    original_encoding = 'unknown'
+                    converted_encoding = 'unknown'
+                except Exception as e2:
+                    print(f"Critical error reading files: {e2}")
+                    return jsonify({'error': f"Error processing files: {e2}"}), 500
             
             # Print samples for debugging
             print(f"Input sample: '{original_content[:50]}...'")
@@ -120,10 +118,12 @@ def convert():
             # Convert text
             if direction == 'utf8_to_ansi':
                 converted_text = converter.utf8_to_ansi(input_text=input_text)
-                output_encoding = 'ansi'
+                output_encoding = 'ascii'  # Use ASCII instead of ANSI
+                errors = 'replace'  # Replace any non-ASCII character with ?
             else:
                 converted_text = converter.ansi_to_utf8(input_text=input_text)
                 output_encoding = 'utf-8'
+                errors = 'strict'  # UTF-8 can handle all characters
             
             print(f"Output sample: '{converted_text[:50]}...'")
             
@@ -136,9 +136,14 @@ def convert():
                 
             output_path = os.path.join(app.config['TEMP_FOLDER'], output_filename)
             
-            # Write to file for download
-            with open(output_path, 'w', encoding=output_encoding) as f:
-                f.write(converted_text)
+            # Write to file for download with proper error handling
+            try:
+                write_file(output_path, converted_text, encoding=output_encoding, errors=errors)
+            except Exception as e:
+                print(f"Warning: Error writing file: {e}")
+                # Try with more aggressive error handling
+                with open(output_path, 'w', encoding=output_encoding, errors='replace') as f:
+                    f.write(converted_text)
             
             # Create response
             response = {
@@ -160,7 +165,7 @@ def convert():
 
 @app.route('/predict', methods=['POST'])
 def direct_predict():
-    """Direct API endpoint to test the predictor model"""
+    """Direct API endpoint to test diacritic restoration"""
     try:
         data = request.get_json()
         if not data or 'text' not in data:
@@ -169,14 +174,14 @@ def direct_predict():
         input_text = data['text']
         print(f"Direct prediction request: '{input_text}'")
         
-        # Check if we have a working predictor
-        if not hasattr(predictor, 'model_loaded') or not predictor.model_loaded:
-            print("Error: No working predictor available")
-            return jsonify({'error': 'Predictor model not available'}), 500
+        # Check if model service is available
+        if not hasattr(converter, 'model_service_available') or not converter.model_service_available:
+            print("Error: Model service not available")
+            return jsonify({'error': 'Diacritic restoration model service not available'}), 500
         
-        # Use predictor to restore diacritics
-        result = predictor.predict(input_text)
-        print(f"Prediction result: '{result}'")
+        # Process through converter
+        result = converter.ansi_to_utf8(input_text=input_text)
+        print(f"Diacritic restoration result: '{result}'")
         
         return jsonify({
             'input': input_text,
@@ -184,7 +189,7 @@ def direct_predict():
         })
     
     except Exception as e:
-        print(f"Error during prediction: {e}")
+        print(f"Error during diacritic restoration: {e}")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
@@ -229,7 +234,7 @@ if __name__ == '__main__':
     
     # Debug information
     print(f"Temp directory: {TEMP_DIR}")
-    print(f"Model loaded: {hasattr(predictor, 'model_loaded') and predictor.model_loaded}")
+    print(f"Model service available: {converter.model_service_available}")
     
     # Run Flask app
     app.run(debug=True, host='0.0.0.0', port=5000) 
